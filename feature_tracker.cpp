@@ -82,7 +82,20 @@ void calc_rect_cam_intri(dai::CalibrationHandler calibData, double* f, double* c
 int main(int argc, char **argv) {
     bool imu_ok = false;
     int ccc=0;
-    enum DEV_TYPE {OAK_D, OAK_D_PRO} dev_type;
+    enum DEV_TYPE {OAK_D, OAK_D_PRO, OAK_D_S2} dev_type;
+    
+    // Parse command line arguments
+    int target_fps = 20;  // Default framerate
+    if (argc > 1) {
+        target_fps = std::atoi(argv[1]);
+        if (target_fps <= 0 || target_fps > 60) {
+            std::cout << "Invalid framerate: " << target_fps << ". Using default 20 fps.\n";
+            std::cout << "Usage: " << argv[0] << " [framerate]\n";
+            std::cout << "  framerate: Target FPS (1-60), default is 20\n";
+            target_fps = 20;
+        }
+    }
+    std::cout << "Target framerate: " << target_fps << " fps\n";
 
     struct sigaction act;
     memset(&act, 0, sizeof(act));
@@ -126,11 +139,11 @@ int main(int argc, char **argv) {
 
     // Properties
     monoLeft->setResolution(dai::MonoCameraProperties::SensorResolution::THE_400_P);
-    monoLeft->setCamera("left");
-    monoLeft->setFps(20);
+    monoLeft->setBoardSocket(dai::CameraBoardSocket::CAM_B);
+    monoLeft->setFps(target_fps);
     monoRight->setResolution(dai::MonoCameraProperties::SensorResolution::THE_400_P);
-    monoRight->setCamera("right");
-    monoRight->setFps(20);
+    monoRight->setBoardSocket(dai::CameraBoardSocket::CAM_C);
+    monoRight->setFps(target_fps);
 
     featureTrackerLeft->initialConfig.setNumTargetFeatures(16*5);
     featureTrackerRight->initialConfig.setNumTargetFeatures(16*5);
@@ -182,7 +195,14 @@ int main(int argc, char **argv) {
 
     std::cout << "Usb speed: " << device.getUsbSpeed() << "\n";
     std::cout << "Device name: " << device.getDeviceName() << " Product name: " << device.getProductName() << "\n";
-    if (device.getDeviceName() == "OAK-D") dev_type = OAK_D; else dev_type = OAK_D_PRO;
+    std::string device_name = device.getDeviceName();
+    if (device_name == "OAK-D") {
+        dev_type = OAK_D;
+    } else if (device_name.find("OAK-D-S2") != std::string::npos) {
+        dev_type = OAK_D_S2;
+    } else {
+        dev_type = OAK_D_PRO;
+    }
 
     dai::CalibrationHandler calibData = device.readCalibration2();
     double f, cx, cy;
@@ -217,7 +237,8 @@ int main(int argc, char **argv) {
     //jakaskerl suggest remove this line
     //https://discuss.luxonis.com/d/3484-getqueueevent-takes-much-additional-time/7
     //device.getQueueEvents();
-
+    int PAIR_DIST_EFFECTIVE = dev_type == OAK_D_S2 ? 200 : PAIR_DIST_SQ;
+    std::cout << "PAIR_DIST_EFFECTIVE: " << PAIR_DIST_EFFECTIVE << "\n";
     while(gogogo) {
         auto q_name = device.getQueueEvent();
 
@@ -250,7 +271,7 @@ int main(int argc, char **argv) {
                 //std::cout << "imu latency, acc:" << std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - acc.getTimestamp()).count() << " ms, gyro:" << std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - gyro.getTimestamp()).count() << " ms\n";
                 big_buf[0] = std::chrono::duration<double>(gyro.getTimestampDevice().time_since_epoch()).count();
                 // translate to ros frame, easier to understand in rviz
-                if (dev_type == OAK_D) {
+                if (dev_type == OAK_D || dev_type == OAK_D_S2) {
                     big_buf[1] = acc.z;
                     big_buf[2] = acc.y;
                     big_buf[3] = -acc.x;
@@ -342,7 +363,7 @@ int main(int argc, char **argv) {
                     for (const auto &r_feature : r_features) {
                         float dy = y - r_feature.position.y;
                         float dx = x - disp - r_feature.position.x;
-                        if (dy * dy + dx * dx <= PAIR_DIST_SQ) { //pair found
+                        if (dy * dy + dx * dx <= PAIR_DIST_EFFECTIVE) { //pair found
                             lr_id_mapping[l_feature.id] = r_feature.id;
                             double dt = std::chrono::duration<double>(features_tp - prv_features_tp).count();
                             double vx = 0, vy = 0;
